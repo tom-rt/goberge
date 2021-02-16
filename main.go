@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	auth "goberge/auth"
+
+	auth "github.com/tom-rt/goberge/auth"
 )
 
 func main() {
