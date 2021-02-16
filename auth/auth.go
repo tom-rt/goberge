@@ -1,4 +1,4 @@
-package goberge
+package auth
 
 import "fmt"
 
