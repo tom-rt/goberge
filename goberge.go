@@ -17,8 +17,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Goberge() {
-	fmt.Println("Goberge")
+// JwtHeader struct
+type JwtHeader struct {
+	Alg string `json:"alg"`
+	Typ string `json:"typ"`
+}
+
+// JwtPayload struct
+type JwtPayload struct {
+	ID      int  `json:"id"`
+	IsAdmin bool `json:"isAdmin"`
+	Iat     int  `json:"iat"`
+	Exp     int  `json:"exp"`
 }
 
 // RefreshToken controller function
@@ -59,7 +69,7 @@ func RefreshToken(c *gin.Context) {
 	// Decode payload
 	decPayloadByte, err := base64.RawURLEncoding.DecodeString(encPayload)
 	decPayload := string(decPayloadByte)
-	payload := new(models.JwtPayload)
+	payload := new(JwtPayload)
 	err = json.Unmarshal([]byte(decPayload), payload)
 	if err != nil {
 		c.JSON(403, gin.H{
@@ -69,7 +79,7 @@ func RefreshToken(c *gin.Context) {
 	}
 
 	// Check signature
-	encSignature := generateSignature(encHeader, encPayload)
+	encSignature := GenerateSignature(encHeader, encPayload)
 	if encSignature != signature {
 		c.JSON(403, gin.H{
 			"message": "Bad signature",
@@ -90,24 +100,8 @@ func RefreshToken(c *gin.Context) {
 
 	// if duration > hoursToMilliseconds(refreshLimit) {
 	if duration > minutesToMilliseconds(refreshLimit) {
-		models.SetReauth(payload.ID, true)
 		c.JSON(401, gin.H{
 			"message": "Token has expired and cannot be refreshed, please reconnect",
-		})
-		return
-	}
-
-	// Check if the user has to re authenticate
-	var reauth bool
-	reauth, err = GetReauth(payload.ID)
-	if reauth {
-		c.JSON(401, gin.H{
-			"message": "Please reconnect.",
-		})
-		return
-	} else if err != nil {
-		c.JSON(404, gin.H{
-			"message": "User does not exist.",
 		})
 		return
 	}
@@ -123,8 +117,8 @@ func RefreshToken(c *gin.Context) {
 
 // GenerateToken function
 func GenerateToken(id int, isAdmin bool) string {
-	var header *models.JwtHeader
-	var payload *models.JwtPayload
+	var header *JwtHeader
+	var payload *JwtPayload
 	const alg = "HS256"
 	const typ = "JWT"
 	var validityLimit int
@@ -137,7 +131,7 @@ func GenerateToken(id int, isAdmin bool) string {
 	}
 
 	// Building and encrypting header
-	header = new(models.JwtHeader)
+	header = new(JwtHeader)
 	header.Alg = alg
 	header.Typ = typ
 	// Error return is ignored here as it cant fail.
@@ -145,7 +139,7 @@ func GenerateToken(id int, isAdmin bool) string {
 	encHeader := base64.RawURLEncoding.EncodeToString([]byte(string(jsonHeader)))
 
 	// Building and encrypting payload
-	payload = new(models.JwtPayload)
+	payload = new(JwtPayload)
 	payload.ID = id
 	payload.IsAdmin = isAdmin
 	now := nowAsUnixMilli()
@@ -155,13 +149,14 @@ func GenerateToken(id int, isAdmin bool) string {
 	encPayload := base64.RawURLEncoding.EncodeToString([]byte(string(jsonPayload)))
 
 	// Building signature and token
-	signature := generateSignature(encHeader, encPayload)
+	signature := GenerateSignature(encHeader, encPayload)
 	token := encHeader + "." + encPayload + "." + signature
 
 	return token
 }
 
-func generateSignature(encHeader string, encPayload string) string {
+// GenerateSignature controller function
+func GenerateSignature(encHeader string, encPayload string) string {
 	var secret = os.Getenv("SECRET_KEY")
 	key := []byte(secret)
 	h := hmac.New(sha256.New, key)
@@ -171,26 +166,27 @@ func generateSignature(encHeader string, encPayload string) string {
 }
 
 // VerifyToken controller: This function checks if the user has to reconnect and if the token is valid. It is only used in the middleware
-func VerifyToken(encHeader string, encPayload string, encSignature string) (isValid bool, message string, status int, id int, isAdmin bool) {
+func VerifyToken(token string) (isValid bool, message string, status int, id int, isAdmin bool) {
+	splittedToken := strings.Split(token, ".")
+	if len(splittedToken) != 3 {
+		return false, "Bad token", 403, -1, false
+	}
+
+	// Getting token data
+	encHeader := splittedToken[0]
+	encPayload := splittedToken[1]
+	encSignature := splittedToken[2]
+
 	// Decode payload
 	decPayloadByte, err := base64.RawURLEncoding.DecodeString(encPayload)
 	decPayload := string(decPayloadByte)
-	payload := new(models.JwtPayload)
+	payload := new(JwtPayload)
 	err = json.Unmarshal([]byte(decPayload), payload)
 	if err != nil {
 		return false, "Bad token", 403, -1, false
 	}
 
-	// Check if the user has to reconnect
-	var reauth bool
-	reauth, err = GetReauth(payload.ID)
-	if reauth {
-		return false, "Please reconnect", 401, -1, false
-	} else if err != nil {
-		return false, "User id in token payload does not exist.", 403, -1, false
-	}
-
-	checkSignature := generateSignature(encHeader, encPayload)
+	checkSignature := GenerateSignature(encHeader, encPayload)
 	if encSignature != checkSignature {
 		return false, "Bad signature", 403, -1, false
 	}
@@ -202,12 +198,6 @@ func VerifyToken(encHeader string, encPayload string, encSignature string) (isVa
 	}
 
 	return true, "Token valid", 200, payload.ID, payload.IsAdmin
-}
-
-// GetReauth function: fetching in db a user's reauth value
-func GetReauth(ID int) (bool, error) {
-	user, err := models.GetUserByID(ID)
-	return user.Reauth, err
 }
 
 func minutesToMilliseconds(min int) int {
